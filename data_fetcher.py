@@ -161,6 +161,42 @@ def get_news_headlines(ticker_symbol: str) -> list[str]:
         return []
 
 
+def get_all_sector_performances() -> list[dict]:
+    """Fetch 1M return for all 11 sector ETFs, independent of the stock list."""
+    etf_symbols = list(SECTOR_ETF_MAP.values())
+    sector_to_etf = {v: k for k, v in SECTOR_ETF_MAP.items()}
+
+    try:
+        df = yf.download(etf_symbols, period="6mo", progress=False)
+        if df.empty:
+            return []
+    except Exception:
+        return []
+
+    results = []
+    for etf in etf_symbols:
+        sector = sector_to_etf[etf]
+        try:
+            if isinstance(df.columns, pd.MultiIndex):
+                close = df["Close"][etf].dropna()
+            else:
+                close = df["Close"].dropna()
+
+            if len(close) < 2:
+                results.append({"sector": sector, "etf": etf, "1m_return": 0.0})
+                continue
+
+            latest = float(close.iloc[-1])
+            idx_1m = min(21, len(close) - 1)
+            close_1m = float(close.iloc[-idx_1m - 1])
+            ret_1m = round((latest / close_1m - 1) * 100, 2)
+            results.append({"sector": sector, "etf": etf, "1m_return": ret_1m})
+        except Exception:
+            results.append({"sector": sector, "etf": etf, "1m_return": 0.0})
+
+    return results
+
+
 def detect_darvas_box(df: pd.DataFrame) -> str:
     """Detect Darvas box pattern in recent price action."""
     if len(df) < 20:

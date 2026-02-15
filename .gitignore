@@ -1,5 +1,6 @@
 .env
 venv/
+.venv/
 charts/
 __pycache__/
 *.pyc

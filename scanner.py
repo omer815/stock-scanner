@@ -26,8 +26,9 @@ from data_fetcher import (
     get_sector_performance, get_institutional_ownership,
     get_earnings_date, get_news_headlines,
     detect_darvas_box, detect_consolidation,
+    get_all_sector_performances,
 )
-from chart_generator import generate_chart
+from chart_generator import generate_chart, generate_yearly_chart
 from gemini_analyzer import analyze_batch
 from discord_notifier import send_to_discord
 from models import ScanResult
@@ -53,8 +54,12 @@ def write_results_json(results: list[ScanResult], path: str) -> None:
         json.dump(data, f, indent=2)
 
 
-def build_sector_heatmap(sector_data_list: list[dict]) -> str:
-    """Build a sector heatmap summary string from collected sector data."""
+def build_sector_heatmap(sector_data_list: list[dict]) -> tuple[str, str]:
+    """Build a sector heatmap summary string from collected sector data.
+
+    Returns (plain_text, ansi_formatted) tuple. Plain text is for Gemini prompt,
+    ANSI formatted is for terminal display.
+    """
     sector_returns = {}
     for data in sector_data_list:
         sector = data.get("sector", "Unknown")
@@ -65,7 +70,7 @@ def build_sector_heatmap(sector_data_list: list[dict]) -> str:
             sector_returns[sector].append(ret_1m)
 
     if not sector_returns:
-        return "No sector data available"
+        return "No sector data available", "No sector data available"
 
     # Average 1-month return per sector, sorted by performance
     sector_avg = {}
@@ -74,7 +79,15 @@ def build_sector_heatmap(sector_data_list: list[dict]) -> str:
 
     sorted_sectors = sorted(sector_avg.items(), key=lambda x: x[1], reverse=True)
 
-    lines = [f"{BOLD}{CYAN}Sector Heatmap (1M avg return):{RESET}"]
+    # Plain text version for Gemini
+    plain_lines = ["Sector Heatmap (1M return):"]
+    for rank, (sector, avg_ret) in enumerate(sorted_sectors, 1):
+        indicator = "+" if avg_ret > 0 else ""
+        plain_lines.append(f"  {rank}. {sector:25s} {indicator}{avg_ret}%")
+    plain_text = "\n".join(plain_lines)
+
+    # ANSI colored version for terminal
+    ansi_lines = [f"{BOLD}{CYAN}Sector Heatmap (1M avg return):{RESET}"]
     for rank, (sector, avg_ret) in enumerate(sorted_sectors, 1):
         if avg_ret > 0:
             color = GREEN
@@ -85,9 +98,10 @@ def build_sector_heatmap(sector_data_list: list[dict]) -> str:
         else:
             color = DIM
             indicator = ""
-        lines.append(f"  {DIM}{rank}.{RESET} {sector:25s} {color}{indicator}{avg_ret}%{RESET}")
+        ansi_lines.append(f"  {DIM}{rank}.{RESET} {sector:25s} {color}{indicator}{avg_ret}%{RESET}")
+    ansi_text = "\n".join(ansi_lines)
 
-    return "\n".join(lines)
+    return plain_text, ansi_text
 
 
 def main():
@@ -104,9 +118,14 @@ def main():
         sys.exit(1)
     print(f"Loaded {len(stocks)} stocks from {args.csv_file}")
 
+    # Fetch stable sector heatmap (all 11 sectors, independent of stock list)
+    print("\nFetching sector heatmap for all sectors...")
+    all_sector_data = get_all_sector_performances()
+    sector_heatmap, sector_heatmap_display = build_sector_heatmap(all_sector_data)
+    print(f"\n{sector_heatmap_display}")
+
     # Phase 1: Fetch data, generate charts, gather enrichment data
     stock_contexts = []  # list of (daily_chart, ticker, context_data)
-    all_sector_data = []
 
     for stock in stocks:
         ticker = stock["ticker"]
@@ -117,15 +136,15 @@ def main():
             print(f"[{ticker}] Skipping - no data")
             continue
 
-        print(f"[{ticker}] Generating chart...")
+        print(f"[{ticker}] Generating charts...")
         daily_chart = generate_chart(ticker, df)
+        daily_chart_1y = generate_yearly_chart(ticker, df)
 
         print(f"[{ticker}] Computing weekly summary...")
         weekly_summary = get_weekly_summary(df)
 
         print(f"[{ticker}] Fetching sector performance...")
         sector_perf = get_sector_performance(ticker)
-        all_sector_data.append(sector_perf)
 
         print(f"[{ticker}] Fetching institutional ownership...")
         inst_summary = get_institutional_ownership(ticker)
@@ -150,6 +169,7 @@ def main():
             "news_headlines": news,
             "darvas_box": darvas,
             "consolidation": consol,
+            "chart_path_1y": daily_chart_1y,
         }
 
         stock_contexts.append((daily_chart, ticker, context_data))
@@ -158,18 +178,15 @@ def main():
         print("\nNo stocks to analyze.")
         sys.exit(1)
 
-    # Phase 2: Build sector heatmap and inject into all contexts
-    sector_heatmap = build_sector_heatmap(all_sector_data)
-    print(f"\n{sector_heatmap}")
-
+    # Inject stable sector heatmap into all contexts
     for _, _, context_data in stock_contexts:
         context_data["sector_heatmap"] = sector_heatmap
 
-    # Phase 3: Analyze with Gemini
+    # Phase 2: Analyze with Gemini
     print(f"\nAnalyzing {len(stock_contexts)} stocks with Gemini...")
     results = analyze_batch(stock_contexts)
 
-    # Phase 4: Summary grouped by watchlist tier
+    # Phase 3: Summary grouped by watchlist tier
     tier_groups = {"Ready Now": [], "Setting Up": [], "Not Yet": []}
     for r in results:
         tier = r.watchlist_tier if r.watchlist_tier in tier_groups else "Not Yet"
@@ -253,10 +270,9 @@ def main():
                           f"{DIM}stop: {RESET}{RED}{stop}{RESET}  "
                           f"{DIM}target: {RESET}{CYAN}{target}{RESET}")
 
-            # Reasoning (truncated)
+            # Reasoning
             if r.reasoning:
-                reasoning = r.reasoning[:120] + ("..." if len(r.reasoning) > 120 else "")
-                print(f"  {DIM}         {reasoning}{RESET}")
+                print(f"  {DIM}         {r.reasoning}{RESET}")
 
             print()
 

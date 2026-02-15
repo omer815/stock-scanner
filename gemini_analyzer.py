@@ -10,9 +10,9 @@ from models import ScanResult
 
 PROMPT_TEMPLATE = """Role: You are a Senior Technical Analyst specializing in price action and volume spread analysis (VSA). Your goal is to identify high-probability bullish entries based on the provided candlestick charts and supplementary data.
 
-You are provided with a daily candlestick chart image.
+You are provided with two daily candlestick chart images: a 5-year overview and a 1-year zoomed view.
 
-Chart legend:
+Chart legend (both charts):
 - Yellow line = SMA 50 (short-term trend)
 - Cyan line = SMA 150 (long-term trend)
 - Bottom panel = Volume bars
@@ -84,6 +84,9 @@ Watchlist Tier Classification:
 - "Setting Up" — Watch: pattern forming but needs trigger (e.g. consolidating near resistance)
 - "Not Yet" — No setup present or stock in downtrend
 
+Reference Examples:
+- Stocks like TGT, PTEN, PG, ADM are examples of the type of bullish setups to look for.
+
 Output Constraints:
 - Selectivity: Set bullish_signal to true only if the price is above the SMA 150 OR shows a confirmed reversal pattern at a major support level.
 - Risk/Reward: stop_loss should be placed below the most recent swing low or the SMA 50/150.
@@ -123,7 +126,7 @@ def _call_gemini_with_retry(client, contents, max_retries=3):
                 model="gemini-2.5-flash",
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    temperature=0.2,
+                    temperature=0.0,
                     response_mime_type="application/json",
                 ),
             )
@@ -141,7 +144,9 @@ def _call_gemini_with_retry(client, contents, max_retries=3):
 def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanResult:
     """Send daily chart image and context data to Gemini and parse the response."""
     client = _build_client()
-    daily_img = Image.open(daily_img_path)
+    daily_img_5y = Image.open(daily_img_path)
+    chart_path_1y = context_data.get("chart_path_1y", "")
+    daily_img_1y = Image.open(chart_path_1y) if chart_path_1y else None
 
     sector_data = context_data.get("sector_performance", {})
     sector_info = (
@@ -166,13 +171,17 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         sector_heatmap=context_data.get("sector_heatmap", "N/A"),
     )
 
-    response = _call_gemini_with_retry(client, [daily_img, prompt_text])
+    contents = [daily_img_5y]
+    if daily_img_1y:
+        contents.append(daily_img_1y)
+    contents.append(prompt_text)
+    response = _call_gemini_with_retry(client, contents)
 
     try:
         data = json.loads(response.text)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"  Failed to parse Gemini response for {ticker}: {e}")
-        return ScanResult(ticker=ticker, reasoning="Failed to parse Gemini response", chart_path=daily_img_path)
+        return ScanResult(ticker=ticker, reasoning="Failed to parse Gemini response", chart_path=daily_img_path, chart_path_1y=chart_path_1y)
 
     return ScanResult(
         ticker=ticker,
@@ -185,6 +194,7 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         sma_analysis=data.get("sma_analysis", ""),
         reasoning=data.get("reasoning", ""),
         chart_path=daily_img_path,
+        chart_path_1y=chart_path_1y,
         sector=context_data.get("sector_performance", {}).get("sector", ""),
         sector_performance=sector_info,
         institutional_summary=context_data.get("institutional_summary", ""),
@@ -208,7 +218,10 @@ def analyze_batch(stocks: list[tuple[str, str, dict]]) -> list[ScanResult]:
                 results.append(result)
             except Exception as e:
                 print(f"  Error analyzing {ticker}: {e}")
-                results.append(ScanResult(ticker=ticker, reasoning=f"Error: {e}", chart_path=daily_img))
+                results.append(ScanResult(
+                    ticker=ticker, reasoning=f"Error: {e}",
+                    chart_path=daily_img, chart_path_1y=context_data.get("chart_path_1y", ""),
+                ))
             # Rate limiting between each call
             time.sleep(GEMINI_RATE_LIMIT_DELAY)
         # Extra delay between batches

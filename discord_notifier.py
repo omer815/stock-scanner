@@ -28,12 +28,20 @@ def send_to_discord(results: list[ScanResult]) -> None:
         embed = _build_embed(result)
         payload = {"embeds": [embed]}
 
-        # Attach chart image if available
-        if result.chart_path:
-            with open(result.chart_path, "rb") as f:
-                files = {"file": (f"{result.ticker}_chart.png", f, "image/png")}
-                payload_data = {"payload_json": json.dumps(payload)}
-                resp = requests.post(DISCORD_WEBHOOK_URL, data=payload_data, files=files, timeout=30)
+        # Attach chart images (1-year as main embed image, 5-year as additional attachment)
+        if result.chart_path_1y or result.chart_path:
+            files = {}
+            if result.chart_path_1y:
+                f_1y = open(result.chart_path_1y, "rb")
+                files["file"] = (f"{result.ticker}_1y.png", f_1y, "image/png")
+            if result.chart_path:
+                f_5y = open(result.chart_path, "rb")
+                key = "file2" if "file" in files else "file"
+                files[key] = (f"{result.ticker}_5y.png", f_5y, "image/png")
+            payload_data = {"payload_json": json.dumps(payload)}
+            resp = requests.post(DISCORD_WEBHOOK_URL, data=payload_data, files=files, timeout=30)
+            for f_obj in files.values():
+                f_obj[1].close()
         else:
             resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
 
@@ -80,5 +88,7 @@ def _build_embed(result: ScanResult) -> dict:
             {"name": "Volume", "value": result.volume_analysis or "N/A", "inline": False},
             {"name": "Reasoning", "value": result.reasoning[:1024] or "N/A", "inline": False},
         ],
-        "image": {"url": "attachment://file.png"} if result.chart_path else {},
+        "image": {"url": f"attachment://{result.ticker}_1y.png"} if result.chart_path_1y else (
+            {"url": f"attachment://{result.ticker}_5y.png"} if result.chart_path else {}
+        ),
     }

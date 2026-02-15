@@ -13,6 +13,7 @@ class ScanResult:
     sma_analysis: str = ""
     reasoning: str = ""
     chart_path: str = ""
+    chart_path_1y: str = ""
     sector: str = ""
     sector_performance: str = ""
     institutional_summary: str = ""
