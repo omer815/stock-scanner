@@ -1,0 +1,7 @@
+.env
+venv/
+charts/
+__pycache__/
+*.pyc
+results.csv
+.idea/
