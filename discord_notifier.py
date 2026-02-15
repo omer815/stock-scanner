@@ -7,19 +7,24 @@ from models import ScanResult
 
 
 def send_to_discord(results: list[ScanResult]) -> None:
-    """Send bullish signals to Discord via webhook."""
+    """Send Ready Now and Setting Up signals to Discord via webhook."""
     if not DISCORD_WEBHOOK_URL:
         print("Discord webhook URL not configured, skipping notifications.")
         return
 
-    bullish = [r for r in results if r.bullish_signal]
-    if not bullish:
-        _send_message("Stock Scanner completed. No bullish signals detected.")
+    actionable = [r for r in results if r.watchlist_tier in ("Ready Now", "Setting Up")]
+    if not actionable:
+        _send_message("Stock Scanner completed. No actionable signals detected.")
         return
 
-    _send_message(f"Stock Scanner found **{len(bullish)}** bullish signal(s):")
+    ready = [r for r in actionable if r.watchlist_tier == "Ready Now"]
+    setting_up = [r for r in actionable if r.watchlist_tier == "Setting Up"]
+    _send_message(
+        f"Stock Scanner found **{len(ready)}** Ready Now and "
+        f"**{len(setting_up)}** Setting Up signal(s):"
+    )
 
-    for result in bullish:
+    for result in actionable:
         embed = _build_embed(result)
         payload = {"embeds": [embed]}
 
@@ -50,12 +55,24 @@ def _build_embed(result: ScanResult) -> dict:
     stop = triggers.get("stop_loss", "N/A")
     target = triggers.get("target_1", "N/A")
 
+    # Color coding by tier
+    if result.watchlist_tier == "Ready Now":
+        color = 0x00FF00  # Green
+        tier_label = "Ready Now"
+    else:
+        color = 0xFFFF00  # Yellow
+        tier_label = "Setting Up"
+
     return {
-        "title": f"Bullish Signal: {result.ticker}",
-        "color": 0x00FF00,
+        "title": f"{tier_label}: {result.ticker}",
+        "color": color,
         "fields": [
+            {"name": "Watchlist Tier", "value": tier_label, "inline": True},
             {"name": "Confidence", "value": f"{result.confidence_score}/100", "inline": True},
             {"name": "Structure", "value": result.market_structure, "inline": True},
+            {"name": "Sector", "value": result.sector_performance or "N/A", "inline": False},
+            {"name": "Earnings", "value": result.earnings_proximity or "N/A", "inline": True},
+            {"name": "News Sentiment", "value": result.news_sentiment or "N/A", "inline": True},
             {"name": "Patterns", "value": ", ".join(result.patterns) or "None", "inline": False},
             {"name": "Entry Zone", "value": str(entry), "inline": True},
             {"name": "Stop Loss", "value": str(stop), "inline": True},
