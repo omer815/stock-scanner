@@ -197,6 +197,25 @@ def get_all_sector_performances() -> list[dict]:
     return results
 
 
+def compute_technical_summary(df: pd.DataFrame) -> dict:
+    """Compute key technical data for text-based AI consumption."""
+    close = float(df["Close"].iloc[-1])
+    sma50 = float(df["Close"].rolling(50).mean().iloc[-1])
+    sma150 = float(df["Close"].rolling(150).mean().iloc[-1])
+
+    return {
+        "current_close": round(close, 2),
+        "sma_50": round(sma50, 2),
+        "sma_150": round(sma150, 2),
+        "price_vs_sma50": "above" if close > sma50 else "below",
+        "price_vs_sma150": "above" if close > sma150 else "below",
+        "sma50_vs_sma150": "above (bullish)" if sma50 > sma150 else "below (bearish)",
+        "sma50_sma150_spread_pct": round((sma50 / sma150 - 1) * 100, 2),
+        "price_to_sma50_pct": round((close / sma50 - 1) * 100, 2),
+        "price_to_sma150_pct": round((close / sma150 - 1) * 100, 2),
+    }
+
+
 def detect_darvas_box(df: pd.DataFrame) -> str:
     """Detect Darvas box pattern in recent price action."""
     if len(df) < 20:

@@ -26,7 +26,7 @@ from data_fetcher import (
     get_sector_performance, get_institutional_ownership,
     get_earnings_date, get_news_headlines,
     detect_darvas_box, detect_consolidation,
-    get_all_sector_performances,
+    get_all_sector_performances, compute_technical_summary,
 )
 from chart_generator import generate_chart, generate_yearly_chart
 from gemini_analyzer import analyze_batch
@@ -136,9 +136,12 @@ def main():
             print(f"[{ticker}] Skipping - no data")
             continue
 
+        print(f"[{ticker}] Computing technical summary...")
+        tech_summary = compute_technical_summary(df)
+
         print(f"[{ticker}] Generating charts...")
-        daily_chart = generate_chart(ticker, df)
-        daily_chart_1y = generate_yearly_chart(ticker, df)
+        daily_chart = generate_chart(ticker, df, tech_summary)
+        daily_chart_1y = generate_yearly_chart(ticker, df, tech_summary)
 
         print(f"[{ticker}] Computing weekly summary...")
         weekly_summary = get_weekly_summary(df)
@@ -170,6 +173,7 @@ def main():
             "darvas_box": darvas,
             "consolidation": consol,
             "chart_path_1y": daily_chart_1y,
+            "technical_summary": tech_summary,
         }
 
         stock_contexts.append((daily_chart, ticker, context_data))

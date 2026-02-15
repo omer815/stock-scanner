@@ -13,9 +13,12 @@ PROMPT_TEMPLATE = """Role: You are a Senior Technical Analyst specializing in pr
 You are provided with two daily candlestick chart images: a 5-year overview and a 1-year zoomed view.
 
 Chart legend (both charts):
+- Green candles = up days, Red candles = down days
 - Yellow line = SMA 50 (short-term trend)
 - Cyan line = SMA 150 (long-term trend)
-- Bottom panel = Volume bars
+- Bottom panel = Volume bars (green = up day, red = down day)
+- Light gray gridlines for price reference
+- Chart title shows current Close, SMA 50, and SMA 150 exact values
 
 Additional context for {ticker}:
 
@@ -42,6 +45,9 @@ Consolidation analysis:
 
 Sector heatmap context:
 {sector_heatmap}
+
+Technical data (exact values — use these rather than estimating from the chart):
+{technical_summary}
 
 Analysis Framework:
 Strictly evaluate the charts for the following criteria:
@@ -113,6 +119,57 @@ Respond in this exact JSON format:
 }}"""
 
 
+def _format_technical_summary(tech_summary: dict | None) -> str:
+    """Format technical summary dict as readable text for the prompt."""
+    if not tech_summary:
+        return "N/A"
+    close = tech_summary["current_close"]
+    sma50 = tech_summary["sma_50"]
+    sma150 = tech_summary["sma_150"]
+    p_sma50 = tech_summary["price_to_sma50_pct"]
+    p_sma150 = tech_summary["price_to_sma150_pct"]
+    spread = tech_summary["sma50_sma150_spread_pct"]
+    alignment = "bullish" if spread > 0 else "bearish"
+    return (
+        f"Price: ${close} | SMA 50: ${sma50} | SMA 150: ${sma150}\n"
+        f"Price vs SMA 50: {p_sma50:+.1f}% ({tech_summary['price_vs_sma50']}) | "
+        f"Price vs SMA 150: {p_sma150:+.1f}% ({tech_summary['price_vs_sma150']})\n"
+        f"SMA 50 vs SMA 150: {spread:+.1f}% ({alignment} alignment)"
+    )
+
+
+def _validate_result(data: dict, tech_summary: dict | None) -> dict:
+    """Sanity-check Gemini output against known technical data."""
+    if not tech_summary:
+        return data
+
+    price_below_sma150 = tech_summary["price_vs_sma150"] == "below"
+    sma50_below_sma150 = tech_summary["sma50_vs_sma150"].startswith("below")
+    confidence = int(data.get("confidence_score", 0))
+
+    # Rule 1: Price below SMA 150 with no reversal pattern → cap confidence
+    patterns = [p.lower() for p in data.get("patterns_detected", [])]
+    reversal_keywords = ["double bottom", "inverse head", "falling wedge", "choch", "change of character", "reversal"]
+    has_reversal = any(kw in p for p in patterns for kw in reversal_keywords)
+
+    if price_below_sma150 and not has_reversal and confidence > 40:
+        data["confidence_score"] = 40
+        data["reasoning"] = f"[Adjusted: confidence capped at 40 — price below SMA 150 with no reversal pattern] {data.get('reasoning', '')}"
+
+    # Rule 2: Death cross (SMA50 < SMA150) + no reversal → cannot be "Ready Now"
+    if sma50_below_sma150 and not has_reversal and data.get("watchlist_tier") == "Ready Now":
+        data["watchlist_tier"] = "Setting Up"
+        data["reasoning"] = f"[Adjusted: downgraded from Ready Now — SMA 50 below SMA 150] {data.get('reasoning', '')}"
+
+    # Rule 3: Price > 15% above SMA 50 → flag as extended, cap confidence at 60
+    price_to_sma50 = tech_summary.get("price_to_sma50_pct", 0)
+    if price_to_sma50 > 15 and confidence > 60:
+        data["confidence_score"] = 60
+        data["reasoning"] = f"[Adjusted: confidence capped at 60 — price extended {price_to_sma50}% above SMA 50] {data.get('reasoning', '')}"
+
+    return data
+
+
 def _build_client() -> genai.Client:
     return genai.Client(api_key=GEMINI_API_KEY)
 
@@ -159,6 +216,7 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
     news_headlines = context_data.get("news_headlines", [])
     news_info = "\n".join(f"- {h}" for h in news_headlines) if news_headlines else "No recent headlines"
 
+    tech_summary = context_data.get("technical_summary")
     prompt_text = PROMPT_TEMPLATE.format(
         ticker=ticker,
         weekly_summary=json.dumps(context_data.get("weekly_summary", {}), indent=2),
@@ -169,6 +227,7 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         darvas_info=context_data.get("darvas_box", "N/A"),
         consolidation_info=context_data.get("consolidation", "N/A"),
         sector_heatmap=context_data.get("sector_heatmap", "N/A"),
+        technical_summary=_format_technical_summary(tech_summary),
     )
 
     contents = [daily_img_5y]
@@ -182,6 +241,8 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
     except (json.JSONDecodeError, ValueError) as e:
         print(f"  Failed to parse Gemini response for {ticker}: {e}")
         return ScanResult(ticker=ticker, reasoning="Failed to parse Gemini response", chart_path=daily_img_path, chart_path_1y=chart_path_1y)
+
+    data = _validate_result(data, tech_summary)
 
     return ScanResult(
         ticker=ticker,
