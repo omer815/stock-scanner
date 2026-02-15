@@ -3,7 +3,9 @@
 
 import argparse
 import csv
+import json
 import sys
+from dataclasses import asdict
 
 from data_fetcher import fetch_stock_data, get_weekly_summary
 from chart_generator import generate_chart
@@ -25,37 +27,18 @@ def read_stocks_csv(path: str) -> list[dict]:
     return stocks
 
 
-def write_results_csv(results: list[ScanResult], path: str) -> None:
-    """Write scan results to CSV."""
-    fieldnames = [
-        "ticker", "bullish_signal", "confidence_score", "market_structure",
-        "patterns", "entry_zone", "stop_loss", "target_1",
-        "volume_analysis", "reasoning",
-    ]
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in results:
-            triggers = r.technical_triggers
-            writer.writerow({
-                "ticker": r.ticker,
-                "bullish_signal": r.bullish_signal,
-                "confidence_score": r.confidence_score,
-                "market_structure": r.market_structure,
-                "patterns": "; ".join(r.patterns),
-                "entry_zone": triggers.get("entry_zone", ""),
-                "stop_loss": triggers.get("stop_loss", ""),
-                "target_1": triggers.get("target_1", ""),
-                "volume_analysis": r.volume_analysis,
-                "reasoning": r.reasoning,
-            })
+def write_results_json(results: list[ScanResult], path: str) -> None:
+    """Write scan results to JSON."""
+    data = [asdict(r) for r in results]
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Stock Scanner - Bullish Setup Detector")
     parser.add_argument("csv_file", help="Path to stocks CSV file (columns: ticker, exchange)")
     parser.add_argument("--no-discord", action="store_true", help="Skip Discord notifications")
-    parser.add_argument("--output", default="results.csv", help="Output CSV path (default: results.csv)")
+    parser.add_argument("--output", default="results.json", help="Output JSON path (default: results.json)")
     args = parser.parse_args()
 
     # Read input
@@ -102,7 +85,7 @@ def main():
     print(f"{'='*50}")
 
     # Write results
-    write_results_csv(results, args.output)
+    write_results_json(results, args.output)
     print(f"\nResults saved to {args.output}")
 
     # Discord

@@ -23,12 +23,12 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python scanner.py stocks.csv --output results.csv
+        run: python scanner.py stocks.csv --output results.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: scan-results
           path: |
-            results.csv
+            results.json
             charts/

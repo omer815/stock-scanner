@@ -3,5 +3,6 @@ venv/
 charts/
 __pycache__/
 *.pyc
+results.json
 results.csv
 .idea/
