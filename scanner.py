@@ -7,6 +7,20 @@ import json
 import sys
 from dataclasses import asdict
 
+# ANSI color codes
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+CYAN = "\033[36m"
+MAGENTA = "\033[35m"
+WHITE = "\033[97m"
+BG_GREEN = "\033[42m"
+BG_YELLOW = "\033[43m"
+BG_RED = "\033[41m"
+
 from data_fetcher import (
     fetch_stock_data, get_weekly_summary,
     get_sector_performance, get_institutional_ownership,
@@ -60,10 +74,18 @@ def build_sector_heatmap(sector_data_list: list[dict]) -> str:
 
     sorted_sectors = sorted(sector_avg.items(), key=lambda x: x[1], reverse=True)
 
-    lines = ["Sector Heatmap (1M avg return):"]
+    lines = [f"{BOLD}{CYAN}Sector Heatmap (1M avg return):{RESET}"]
     for rank, (sector, avg_ret) in enumerate(sorted_sectors, 1):
-        indicator = "+" if avg_ret >= 0 else ""
-        lines.append(f"  {rank}. {sector}: {indicator}{avg_ret}%")
+        if avg_ret > 0:
+            color = GREEN
+            indicator = "+"
+        elif avg_ret < 0:
+            color = RED
+            indicator = ""
+        else:
+            color = DIM
+            indicator = ""
+        lines.append(f"  {DIM}{rank}.{RESET} {sector:25s} {color}{indicator}{avg_ret}%{RESET}")
 
     return "\n".join(lines)
 
@@ -153,20 +175,98 @@ def main():
         tier = r.watchlist_tier if r.watchlist_tier in tier_groups else "Not Yet"
         tier_groups[tier].append(r)
 
-    print(f"\n{'='*60}")
+    print(f"\n{BOLD}{WHITE}{'='*70}{RESET}")
+    print(f"{BOLD}{WHITE}  SCAN RESULTS{RESET}")
+    print(f"{BOLD}{WHITE}{'='*70}{RESET}")
+
+    tier_styles = {
+        "Ready Now": (BG_GREEN, GREEN, "READY NOW"),
+        "Setting Up": (BG_YELLOW, YELLOW, "SETTING UP"),
+        "Not Yet": (BG_RED, RED, "NOT YET"),
+    }
+
     for tier_name in ["Ready Now", "Setting Up", "Not Yet"]:
         tier_results = tier_groups[tier_name]
-        if tier_results:
-            print(f"\n=== {tier_name.upper()} ===")
-            for r in tier_results:
-                signal = "BULLISH" if r.bullish_signal else "---"
-                print(f"  {r.ticker:8s} {signal:8s} confidence={r.confidence_score:3d}  {r.market_structure}")
+        if not tier_results:
+            continue
+        bg, fg, label = tier_styles[tier_name]
+        print(f"\n  {bg}{BOLD} {label} {RESET}  {DIM}({len(tier_results)} stocks){RESET}")
+        print(f"  {DIM}{'-'*66}{RESET}")
+
+        for r in tier_results:
+            # Ticker and signal
+            if r.bullish_signal:
+                signal = f"{GREEN}{BOLD}BULLISH{RESET}"
+            else:
+                signal = f"{DIM}---{RESET}"
+
+            # Confidence with color
+            conf = r.confidence_score
+            if conf >= 70:
+                conf_str = f"{GREEN}{BOLD}{conf}{RESET}"
+            elif conf >= 40:
+                conf_str = f"{YELLOW}{conf}{RESET}"
+            else:
+                conf_str = f"{RED}{conf}{RESET}"
+
+            # Structure with color
+            structure = r.market_structure
+            if "uptrend" in structure.lower():
+                struct_str = f"{GREEN}{structure}{RESET}"
+            elif "downtrend" in structure.lower():
+                struct_str = f"{RED}{structure}{RESET}"
+            else:
+                struct_str = f"{YELLOW}{structure}{RESET}"
+
+            print(f"  {BOLD}{WHITE}{r.ticker:8s}{RESET} {signal:>20s}  "
+                  f"conf={conf_str:>15s}  {struct_str}")
+
+            # Sector + earnings on next line
+            sector = r.sector or "N/A"
+            earnings = r.earnings_proximity or "N/A"
+            print(f"  {DIM}         sector: {RESET}{CYAN}{sector}{RESET}  "
+                  f"{DIM}| earnings: {RESET}{earnings}")
+
+            # News sentiment + consolidation
+            sentiment = r.news_sentiment or "N/A"
+            if "bullish" in sentiment.lower():
+                sent_str = f"{GREEN}{sentiment}{RESET}"
+            elif "bearish" in sentiment.lower():
+                sent_str = f"{RED}{sentiment}{RESET}"
+            else:
+                sent_str = f"{DIM}{sentiment}{RESET}"
+            print(f"  {DIM}         sentiment: {RESET}{sent_str}  "
+                  f"{DIM}| {RESET}{r.consolidation or 'N/A'}")
+
+            # Darvas box
+            if r.darvas_box and "none" not in r.darvas_box.lower():
+                print(f"  {DIM}         darvas: {RESET}{MAGENTA}{r.darvas_box}{RESET}")
+
+            # Entry/Stop/Target
+            triggers = r.technical_triggers
+            if triggers:
+                entry = triggers.get("entry_zone", "")
+                stop = triggers.get("stop_loss", "")
+                target = triggers.get("target_1", "")
+                if entry or stop or target:
+                    print(f"  {DIM}         entry: {RESET}{GREEN}{entry}{RESET}  "
+                          f"{DIM}stop: {RESET}{RED}{stop}{RESET}  "
+                          f"{DIM}target: {RESET}{CYAN}{target}{RESET}")
+
+            # Reasoning (truncated)
+            if r.reasoning:
+                reasoning = r.reasoning[:120] + ("..." if len(r.reasoning) > 120 else "")
+                print(f"  {DIM}         {reasoning}{RESET}")
+
+            print()
 
     bullish_count = sum(1 for r in results if r.bullish_signal)
-    print(f"\n{'='*60}")
-    print(f"Total: {bullish_count}/{len(results)} bullish signals")
-    print(f"Ready Now: {len(tier_groups['Ready Now'])} | Setting Up: {len(tier_groups['Setting Up'])} | Not Yet: {len(tier_groups['Not Yet'])}")
-    print(f"{'='*60}")
+    print(f"{BOLD}{WHITE}{'='*70}{RESET}")
+    print(f"  {BOLD}Total: {GREEN}{bullish_count}{RESET}{BOLD}/{len(results)} bullish signals{RESET}")
+    print(f"  {GREEN}Ready Now: {len(tier_groups['Ready Now'])}{RESET} | "
+          f"{YELLOW}Setting Up: {len(tier_groups['Setting Up'])}{RESET} | "
+          f"{RED}Not Yet: {len(tier_groups['Not Yet'])}{RESET}")
+    print(f"{BOLD}{WHITE}{'='*70}{RESET}")
 
     # Write results
     write_results_json(results, args.output)
