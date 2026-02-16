@@ -8,22 +8,30 @@ from PIL import Image
 from config import GEMINI_API_KEY, BATCH_SIZE, GEMINI_RATE_LIMIT_DELAY
 from models import ScanResult
 
-PROMPT_TEMPLATE = """Role: You are a Senior Technical Analyst specializing in price action and volume spread analysis (VSA). Your goal is to identify high-probability bullish entries based on the provided candlestick charts and supplementary data.
+PROMPT_TEMPLATE = """Role: You are a Senior Technical Analyst specializing in price action, volume spread analysis (VSA), and multi-timeframe analysis. Your goal is to identify high-probability bullish entries based on the provided candlestick charts, price history data, and supplementary context.
 
-You are provided with two daily candlestick chart images: a 5-year overview and a 1-year zoomed view.
+You are provided with four daily candlestick chart images:
+1. 5-year overview (full history)
+2. 3-year intermediate view
+3. 1-year zoomed view
+4. 3-month short-term detail
 
-Chart legend (both charts):
+Chart legend (all charts):
 - Green candles = up days, Red candles = down days
 - Yellow line = SMA 50 (short-term trend)
 - Cyan line = SMA 150 (long-term trend)
 - Bottom panel = Volume bars (green = up day, red = down day)
 - Light gray gridlines for price reference
 - Chart title shows current Close, SMA 50, and SMA 150 exact values
+- SMAs are pre-computed on the full 5Y dataset, so values are consistent across all timeframe views
 
 Additional context for {ticker}:
 
 Weekly data summary:
 {weekly_summary}
+
+Price history (last 90 trading days):
+{price_history}
 
 Sector context:
 {sector_info}
@@ -49,73 +57,221 @@ Sector heatmap context:
 Technical data (exact values — use these rather than estimating from the chart):
 {technical_summary}
 
-Analysis Framework:
-Strictly evaluate the charts for the following criteria:
+Analysis Framework — Evaluate ALL of the following systematically:
 
-Structural Shifts:
-- Reversals: Identify "Change of Character" (ChoCh)—e.g., a higher high following a prolonged downtrend. Look for Double Bottoms, Inverse Head & Shoulders, or falling wedges.
-- SMA 150 Interaction: Prioritize setups where price recovers the SMA 150 and holds it as new support (the "Flip").
+1. Current Price Status:
+   - Where is price relative to key SMAs, 52-week high/low?
+   - Calculate 1-month and 3-month price change from the price history table.
+   - Is price extended or at a reasonable entry point?
+   - IDEAL: Price recently broke above SMA 150, within 5-10% of the breakout level (not overextended)
 
-Moving Average Analysis:
-- SMA 50/150 Relationship: Note whether the SMA 50 is above or below the SMA 150 (bullish vs bearish alignment). Identify Golden Cross (SMA 50 crossing above SMA 150) or Death Cross (SMA 50 crossing below SMA 150).
-- Price vs SMAs: Assess whether price is above both SMAs (strong uptrend), between them (transitional), or below both (downtrend).
-- SMA 50 as Dynamic Support/Resistance: On pullbacks in an uptrend, check if SMA 50 acts as support.
+2. Market Structure (Stan Weinstein Stages) — PRIORITIZE EARLY STAGE 2:
+   - Stage 1 (Basing): Price oscillating around flat SMA 150
+   - Stage 2 (Advancing): Price above rising SMA 150, SMA 50 above SMA 150
+     * EARLY Stage 2: Recently crossed above SMA 150, SMA 50 just crossed above SMA 150 (Golden Cross within last 4-8 weeks), price still near the breakout level (not extended)
+     * MID Stage 2: Price well above SMA 150, established uptrend
+     * LATE Stage 2: Price far from SMA 150, potentially overextended
+   - Stage 3 (Topping): Price struggling at highs, SMA 150 flattening
+   - Stage 4 (Declining): Price below declining SMA 150
+   - Stage 1→2 Transition: Identify Change of Character (ChoCh) — e.g., first higher high after prolonged downtrend, price breaking above declining SMA 150 for the first time
 
-Momentum & Breakouts:
-- Identify "Volatility Contraction" (VCP) patterns.
-- Look for breakouts from definitive horizontal resistance or Ascending Triangles.
-- Candlestick Confirmation: Require a strong close (minimal upper wick) on breakout candles.
+3. Pattern Recognition:
+   - Identify specific patterns: Cup & Handle, VCP, Ascending Triangle, Double Bottom, Inverse H&S, Falling Wedge, Bull Flag, Flat Base, High Tight Flag
+   - Rate pattern quality (1-10) based on textbook characteristics
+   - Assess pattern completion percentage and expected breakout zone
 
-Volume Integrity:
-- Accumulation: Volume must be > 20-period average on up-bars during the breakout.
-- VSA: Look for "Volume Dry-up" (low volume pullbacks) indicating a lack of selling pressure.
+4. Moving Average Analysis — FOCUS ON EARLY STAGE 2 CHARACTERISTICS:
+   - SMA 50/150 relationship: Golden Cross, Death Cross, spread %
+     * IDEAL: Recent Golden Cross (SMA 50 crossed above SMA 150 within last 4-8 weeks)
+     * Narrow spread between SMA 50 and SMA 150 (0-5%) indicates early Stage 2
+     * Wide spread (>10%) may indicate late Stage 2 or overextension
+   - Price vs SMAs: above both (strong), between (transitional), below both (weak)
+   - SMA 50 as dynamic support/resistance on pullbacks
+   - SMA slope direction and acceleration
+   - SMA 150 turning from flat/declining to rising is a key Stage 1→2 transition signal
 
-Darvas Box:
-- Identify Darvas box formations — new highs followed by tight consolidation. Breakout above box top with volume = bullish.
+5. Volume Integrity:
+   - Accumulation vs Distribution days (count high-volume up vs down days in last 20 bars)
+   - Volume on breakout attempts vs pullbacks
+   - Volume Dry-Up: low volume pullbacks indicating lack of selling pressure
+   - Average volume trend (expanding or contracting)
 
-Consolidation/VCP:
-- Assess volatility contraction via ATR compression. Tight consolidation after an uptrend = potential breakout setup.
+6. Darvas Box Analysis:
+   - Confirm or refine the provided Darvas box data using the charts
+   - Identify box top, bottom, range %, weeks forming, breakout status
 
-Sector Context:
-- Is the sector outperforming the market? Stocks in strong sectors have higher probability.
+7. Consolidation / VCP Analysis:
+   - ATR compression trend from the provided data
+   - Count VCP contractions (T1, T2, T3 etc.)
+   - Base depth and length relative to prior advance
+   - Rate base quality (1-10)
 
-Earnings Risk:
-- If earnings within 14 days, flag as higher risk regardless of setup quality.
+8. Multi-Timeframe Confirmation:
+   - 5Y chart: Long-term trend direction, major support/resistance levels
+   - 3Y chart: Intermediate trend, base formations
+   - 1Y chart: Current setup context, recent pattern development
+   - 3M chart: Short-term price action quality, entry timing
+   - Do all timeframes align for a bullish thesis?
 
-News Catalyst:
-- Assess if recent headlines suggest positive/negative catalysts.
+9. Key Levels:
+   - Identify 2-3 support levels with reasoning (SMA, swing low, prior resistance turned support)
+   - Identify 2-3 resistance levels with reasoning (prior high, round number, measured move target)
 
-Watchlist Tier Classification:
-- "Ready Now" — Actionable: confirmed breakout or reversal with volume confirmation
-- "Setting Up" — Watch: pattern forming but needs trigger (e.g. consolidating near resistance)
-- "Not Yet" — No setup present or stock in downtrend
+10. Risk/Reward Calculation:
+    - Entry zone: specific price range for entry
+    - Stop loss: below nearest swing low or key SMA
+    - Target 1: nearest resistance (conservative)
+    - Target 2: measured move target (moderate)
+    - Target 3: major resistance or extension (aggressive)
+    - Calculate R/R ratio for Target 1
+
+11. Sector Strength:
+    - Is the sector outperforming or underperforming SPY?
+    - Sector rotation context — is money flowing into or out of this sector?
+
+12. Earnings Risk Assessment:
+    - Days until next earnings
+    - Risk level: LOW (>30 days), MEDIUM (14-30 days), HIGH (7-14 days), CRITICAL (<7 days)
+    - Impact on trade management
+
+13. News & Sentiment:
+    - Analyze provided headlines for catalysts
+    - Overall sentiment: Bullish, Bearish, or Neutral
+    - Any material news that changes the technical picture?
+
+14. Red Flags:
+    - List any concerns: distribution days, failed breakouts, earnings risk, bearish divergences, overhead supply, declining volume on advances, etc.
+
+15. Catalysts:
+    - List positive factors: accumulation, sector strength, pattern completion, institutional buying, positive news, etc.
+
+16. Last Breakout:
+    - Identify the most recent breakout attempt from the charts and price history
+    - When did it occur (approximate date)? At what price level?
+    - Was volume above average on the breakout day/candle?
+    - Did the breakout succeed (price held above), fail (price fell back), or is it still in progress?
+
+Watchlist Tier Classification — PRIORITIZE EARLY STAGE 2 SETUPS:
+- "Ready Now" — Actionable early Stage 2:
+  * Price recently broke above SMA 150 (within last 4-8 weeks) OR confirmed breakout from consolidation above both SMAs
+  * SMA 50 above SMA 150 with narrow spread (0-8%), indicating fresh Golden Cross
+  * Volume confirmation on breakout
+  * Price NOT overextended (within 5-15% of SMA 150)
+  * R/R >= 3:1, no earnings within 7 days
+  * Base formation visible on 3Y/1Y charts before the Stage 2 entry
+- "Setting Up" — Watch for Stage 1→2 transition:
+  * Currently in late Stage 1 (basing), SMA 150 flattening or starting to turn up
+  * Price consolidating near/above SMA 150 but SMA 50 not yet above SMA 150
+  * Pattern forming (VCP, Cup & Handle) but needs breakout trigger
+  * OR mid-Stage 2 pullback to SMA 50 support, waiting for bounce
+- "Not Yet" — No setup present, stock in downtrend, late Stage 2 overextension, or too many red flags
 
 Reference Examples:
 - Stocks like TGT, PTEN, PG, ADM are examples of the type of bullish setups to look for.
 
 Output Constraints:
-- Selectivity: Set bullish_signal to true only if the price is above the SMA 150 OR shows a confirmed reversal pattern at a major support level.
+- Selectivity: Set bullish_signal to true only if:
+  * EARLY Stage 2 (recently crossed above SMA 150, narrow SMA spread) OR
+  * Confirmed Stage 1→2 transition with volume OR
+  * Early/mid Stage 2 pullback to SMA 50 support with bounce signal
+  * AVOID late Stage 2 overextensions (price >15% above SMA 150 with wide SMA spread >10%)
 - Risk/Reward: stop_loss should be placed below the most recent swing low or the SMA 50/150.
-- Tone: Objective, data-driven, and skeptical.
+- Tone: Objective, data-driven, and skeptical. Favor EARLY Stage 2 setups over established trends. Provide thorough reasoning.
 
 Respond in this exact JSON format:
 {{
   "bullish_signal": boolean,
   "confidence_score": "0-100",
-  "market_structure": "Uptrend/Downtrend/Consolidation",
+  "market_structure": "Early Stage 2 / Mid Stage 2 / Late Stage 2 / Stage 1 (Basing) / Stage 1→2 Transition / Stage 3 (Topping) / Stage 4 (Declining)",
+  "current_price_status": {{
+    "price": "current price",
+    "change_1m_pct": "1-month % change",
+    "change_3m_pct": "3-month % change",
+    "distance_from_52w_high_pct": "% below 52-week high",
+    "distance_from_52w_low_pct": "% above 52-week low"
+  }},
   "patterns_detected": ["List specific patterns"],
+  "pattern_details": {{
+    "primary_pattern": "Name of main pattern",
+    "quality_score": "1-10",
+    "completion_pct": "percentage complete",
+    "status": "Forming / Complete / Breaking Out / Failed"
+  }},
   "technical_triggers": {{
     "entry_zone": "Price range",
     "stop_loss": "Specific price",
-    "target_1": "Next resistance level"
+    "target_1": "Next resistance level",
+    "target_2": "Measured move target",
+    "target_3": "Major resistance / extension target",
+    "risk_reward_ratio": "X.X:1 based on entry midpoint to target_1 vs stop"
   }},
-  "volume_analysis": "Describe the volume relationship to price action",
-  "sma_analysis": "Describe the SMA 50/150 relationship, crossovers, and price position relative to both SMAs",
-  "reasoning": "A concise professional synthesis of the evidence.",
+  "volume_analysis": "Detailed description of volume behavior — accumulation/distribution days, volume on breakouts vs pullbacks, dry-up patterns",
+  "sma_analysis": "Detailed description of SMA 50/150 relationship, crossovers, slope, price position relative to both SMAs, dynamic support/resistance behavior. Include SMA 50/150 spread % and whether it indicates Early/Mid/Late Stage 2.",
+  "stage_2_analysis": {{
+    "phase": "Early / Mid / Late / N/A (if not in Stage 2)",
+    "golden_cross_date": "Approximate date of SMA 50 crossing above SMA 150, or N/A",
+    "weeks_since_stage_2_entry": "Number of weeks since Stage 2 began, or N/A",
+    "sma_spread_pct": "Percentage spread between SMA 50 and SMA 150",
+    "price_extension_from_sma150_pct": "Percentage distance of price above SMA 150",
+    "assessment": "Brief assessment: Is this an ideal early Stage 2 entry, or is it overextended?"
+  }},
+  "price_action_quality": "Describe candlestick patterns, higher highs/higher lows structure, close quality (near highs vs middle vs near lows), gap behavior",
+  "reasoning": "A thorough professional synthesis of ALL evidence. This should be 3-5 sentences minimum covering the key technical picture, Stage 2 phase, pattern context, volume confirmation, and risk factors. EMPHASIZE whether this is an early Stage 2 setup.",
   "watchlist_tier": "Ready Now / Setting Up / Not Yet",
-  "darvas_box": "Description of Darvas box status from chart",
-  "consolidation": "Consolidation assessment from chart and ATR data",
-  "news_sentiment": "Bullish/Bearish/Neutral with brief reasoning"
+  "watchlist_tier_reasoning": "Explain which criteria are met and which are not for the assigned tier. Use checkmarks for met and X for unmet.",
+  "darvas_box": {{
+    "box_top": "price or N/A",
+    "box_bottom": "price or N/A",
+    "range_pct": "percentage range or N/A",
+    "weeks_forming": "number or N/A",
+    "status": "Within / Breakout / Breakdown / None"
+  }},
+  "consolidation": {{
+    "atr_trend": "Contracting / Expanding / Stable",
+    "vcp_stages": "number of contractions or N/A",
+    "base_depth_pct": "percentage depth from high to low of base",
+    "base_length_weeks": "number of weeks",
+    "base_quality": "1-10"
+  }},
+  "sector_strength": {{
+    "sector": "sector name",
+    "vs_spy": "Outperforming / Underperforming / In-line",
+    "rotation_trend": "Money flowing in / out / neutral"
+  }},
+  "institutional_activity": {{
+    "ownership_pct": "percentage or N/A",
+    "trend": "Increasing / Decreasing / Stable / N/A",
+    "notable": "Any notable insider or institutional activity"
+  }},
+  "earnings_risk": {{
+    "days_until": "number or N/A",
+    "risk_level": "LOW / MEDIUM / HIGH / CRITICAL",
+    "impact": "Brief description of impact on trade management"
+  }},
+  "news_sentiment": {{
+    "overall": "Bullish / Bearish / Neutral",
+    "reasoning": "Brief explanation based on headlines"
+  }},
+  "key_levels": {{
+    "support": ["$X.XX (reason)", "$X.XX (reason)"],
+    "resistance": ["$X.XX (reason)", "$X.XX (reason)"]
+  }},
+  "red_flags": ["List of concerns, empty array if none"],
+  "catalysts": ["List of positive factors"],
+  "multi_timeframe_confirmation": {{
+    "weekly_trend": "Bullish / Bearish / Neutral",
+    "monthly_trend": "Bullish / Bearish / Neutral",
+    "daily_setup": "Description of daily timeframe setup",
+    "alignment": "All aligned / Mostly aligned / Mixed / Conflicting"
+  }},
+  "last_breakout": {{
+    "date": "approximate date of the most recent breakout attempt (YYYY-MM-DD or N/A)",
+    "price": "price level at breakout or N/A",
+    "volume_confirmation": "Yes / No / Partial — was volume above average on the breakout day?",
+    "success": "Successful / Failed / In Progress / N/A",
+    "description": "Brief description of what broke out and outcome"
+  }},
+  "action_plan": "Specific trade instruction: entry price/range, stop loss with % risk, first target with R/R ratio. One clear sentence."
 }}"""
 
 
@@ -198,12 +354,26 @@ def _call_gemini_with_retry(client, contents, max_retries=3):
                 raise
 
 
+def _safe_str(value) -> str:
+    """Convert a value to string, handling dicts/lists gracefully."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value) if value else ""
+
+
 def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanResult:
-    """Send daily chart image and context data to Gemini and parse the response."""
+    """Send daily chart images and context data to Gemini and parse the response."""
     client = _build_client()
     daily_img_5y = Image.open(daily_img_path)
+
+    # Load all available chart images
+    chart_path_3y = context_data.get("chart_path_3y", "")
     chart_path_1y = context_data.get("chart_path_1y", "")
+    chart_path_3m = context_data.get("chart_path_3m", "")
+
+    daily_img_3y = Image.open(chart_path_3y) if chart_path_3y else None
     daily_img_1y = Image.open(chart_path_1y) if chart_path_1y else None
+    daily_img_3m = Image.open(chart_path_3m) if chart_path_3m else None
 
     sector_data = context_data.get("sector_performance", {})
     sector_info = (
@@ -220,6 +390,7 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
     prompt_text = PROMPT_TEMPLATE.format(
         ticker=ticker,
         weekly_summary=json.dumps(context_data.get("weekly_summary", {}), indent=2),
+        price_history=context_data.get("price_history", "N/A"),
         sector_info=sector_info,
         institutional_info=context_data.get("institutional_summary", "N/A"),
         earnings_info=context_data.get("earnings_proximity", "N/A"),
@@ -230,17 +401,27 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         technical_summary=_format_technical_summary(tech_summary),
     )
 
+    # Send all chart images: 5Y, 3Y, 1Y, 3M
     contents = [daily_img_5y]
+    if daily_img_3y:
+        contents.append(daily_img_3y)
     if daily_img_1y:
         contents.append(daily_img_1y)
+    if daily_img_3m:
+        contents.append(daily_img_3m)
     contents.append(prompt_text)
+
     response = _call_gemini_with_retry(client, contents)
 
     try:
         data = json.loads(response.text)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"  Failed to parse Gemini response for {ticker}: {e}")
-        return ScanResult(ticker=ticker, reasoning="Failed to parse Gemini response", chart_path=daily_img_path, chart_path_1y=chart_path_1y)
+        return ScanResult(
+            ticker=ticker, reasoning="Failed to parse Gemini response",
+            chart_path=daily_img_path, chart_path_1y=chart_path_1y,
+            chart_path_3y=chart_path_3y, chart_path_3m=chart_path_3m,
+        )
 
     data = _validate_result(data, tech_summary)
 
@@ -253,9 +434,12 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         technical_triggers=data.get("technical_triggers", {}),
         volume_analysis=data.get("volume_analysis", ""),
         sma_analysis=data.get("sma_analysis", ""),
+        stage_2_analysis=data.get("stage_2_analysis", {}),
         reasoning=data.get("reasoning", ""),
         chart_path=daily_img_path,
         chart_path_1y=chart_path_1y,
+        chart_path_3y=chart_path_3y,
+        chart_path_3m=chart_path_3m,
         sector=context_data.get("sector_performance", {}).get("sector", ""),
         sector_performance=sector_info,
         institutional_summary=context_data.get("institutional_summary", ""),
@@ -264,6 +448,19 @@ def analyze_stock(daily_img_path: str, context_data: dict, ticker: str) -> ScanR
         watchlist_tier=data.get("watchlist_tier", "Not Yet"),
         darvas_box=data.get("darvas_box", ""),
         consolidation=data.get("consolidation", ""),
+        current_price_status=data.get("current_price_status", {}),
+        pattern_details=data.get("pattern_details", {}),
+        price_action_quality=data.get("price_action_quality", ""),
+        watchlist_tier_reasoning=data.get("watchlist_tier_reasoning", ""),
+        sector_strength=data.get("sector_strength", {}),
+        institutional_activity=data.get("institutional_activity", {}),
+        earnings_risk=data.get("earnings_risk", {}),
+        key_levels=data.get("key_levels", {}),
+        red_flags=data.get("red_flags", []),
+        catalysts=data.get("catalysts", []),
+        multi_timeframe_confirmation=data.get("multi_timeframe_confirmation", {}),
+        last_breakout=data.get("last_breakout", {}),
+        action_plan=data.get("action_plan", ""),
     )
 
 
@@ -282,6 +479,8 @@ def analyze_batch(stocks: list[tuple[str, str, dict]]) -> list[ScanResult]:
                 results.append(ScanResult(
                     ticker=ticker, reasoning=f"Error: {e}",
                     chart_path=daily_img, chart_path_1y=context_data.get("chart_path_1y", ""),
+                    chart_path_3y=context_data.get("chart_path_3y", ""),
+                    chart_path_3m=context_data.get("chart_path_3m", ""),
                 ))
             # Rate limiting between each call
             time.sleep(GEMINI_RATE_LIMIT_DELAY)
